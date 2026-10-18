@@ -24,6 +24,7 @@ from katrain.api.model import (
 from katrain.api.protocol import ApiError
 from katrain.core.game import KaTrainSGF
 from katrain.core.game_node import GameNode
+from katrain.gui.zoomview import set_zoom
 
 LEVEL_WORDS = (
     "elementary",
@@ -188,6 +189,31 @@ def _first_line(node):
     return line
 
 
+VIEW_MARGIN = 2  # lines of empty board shown around the problem stones
+VIEW_MIN_SPAN = 7
+
+
+def problem_view_region(problem_root):
+    """Rectangle around the problem's own stones (not the frame) for the zoomed diagram view."""
+    szx, szy = problem_root.board_size
+    coords = [m.coords for m in problem_root.placements if m.coords is not None]
+    if not coords:
+        return [0, szx - 1, 0, szy - 1]
+
+    def span(lo, hi, size):
+        lo, hi = max(0, lo - VIEW_MARGIN), min(size - 1, hi + VIEW_MARGIN)
+        while hi - lo + 1 < min(VIEW_MIN_SPAN, size):  # grow towards the board center
+            if lo > 0 and (hi == size - 1 or lo > size - 1 - hi):
+                lo -= 1
+            else:
+                hi += 1
+        return lo, hi
+
+    xmin, xmax = span(min(c[0] for c in coords), max(c[0] for c in coords), szx)
+    ymin, ymax = span(min(c[1] for c in coords), max(c[1] for c in coords), szy)
+    return [xmin, xmax, ymin, ymax]
+
+
 class TsumegoState:
     def __init__(self, meta, solution_root, problem_root, start_node, region, to_play):
         self.meta = meta
@@ -206,6 +232,9 @@ class TsumegoState:
         self.group = None  # coords of a stone in the target group
         self.evals = {}  # node -> summarised raw KataGo result
         self.attempts = 0
+        # the frame node (child of the problem root) holds only the frame's stones
+        self.frame_coords = {m.coords for m in start_node.placements} if start_node is not problem_root else set()
+        self.view_region = problem_view_region(problem_root)
 
     def summary(self):
         return {
@@ -217,6 +246,7 @@ class TsumegoState:
             "region": region_json(self.region),
             "has_reference_solution": bool(self.solution_root.children),
             "attempts": self.attempts,
+            "view": region_json(self.view_region),
         }
 
 
@@ -385,6 +415,8 @@ def cmd_tsumego_load(h, a):
     h.state.tsumego = ts
     if ts.goal:
         ts.group = _default_group(ts, start)
+    if _bool(a.get("zoom"), True):
+        set_zoom(h.katrain.board_gui, ts.view_region, ts.frame_coords)
     h.refresh()
     return {**ts.summary(), "previous_game_backup": backup}
 

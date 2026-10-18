@@ -145,6 +145,9 @@ katrain tsumego solution [--show]                  # SGF reference lines (correc
 katrain tsumego reset                              # back to the start, attempt moves removed
 ```
 
+`tsumego load` also zooms the board to the problem (like a book diagram) and hides the frame stones; KataGo still
+uses them. `katrain view --zoom off|auto|C3:G7 --hide-frame on|off` changes this; loading any other game resets it.
+
 `tsumego try` returns `winrate_lost`, `was_best_move`, `target.status`, `goal_met`, `better_moves` and
 `refutation_pv` (KataGo's punishment line after a wrong move — show it with `pv show --from <node> ...`).
 

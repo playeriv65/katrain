@@ -42,6 +42,7 @@ from katrain.api.overlay import parse_color as parse_mark_color
 from katrain.api.protocol import DATA_FOLDER, ApiError
 from katrain.core.constants import MODE_ANALYZE, MODE_PLAY, PRIORITY_EXTRA_ANALYSIS, REPORT_DT, STATUS_INFO
 from katrain.core.game import KaTrainSGF
+from katrain.gui.zoomview import set_zoom
 
 COMMANDS = {}
 BACKGROUND_PRIORITY = -50  # below KaTrain's interactive queries (PRIORITY_DEFAULT=1000), above game re-analysis
@@ -469,6 +470,7 @@ def _load_tree(h, move_tree, fast, at_end, sgf_filename=None):
     h.state.demo = None
     h.state.marks = []
     h.state.tsumego = None
+    set_zoom(h.katrain.board_gui, None)
     h.katrain._do_new_game(move_tree=move_tree, analyze_fast=fast, sgf_filename=sgf_filename)
     if at_end:
         h.katrain.game.redo(9999)
@@ -1111,8 +1113,10 @@ def cmd_region_clear(h, a):
 
 @command("view.set")
 def cmd_view_set(h, a):
-    """Toggle display layers: hints, ownership, policy, eval, children, move_numbers (true/false)."""
+    """Toggle display layers: hints, ownership, policy, eval, children, move_numbers (true/false); zoom=C3:G7|auto|off
+    shows only part of the board (auto = the loaded tsumego problem); hide_frame hides the tsumego frame stones."""
     controls = h.katrain.analysis_controls
+    board = h.katrain.board_gui
     changed = {}
     for key, widget_id in VIEW_TOGGLES.items():
         if a.get(key) is not None:
@@ -1121,9 +1125,29 @@ def cmd_view_set(h, a):
     if a.get("move_numbers") is not None:
         h.katrain.show_move_num = _bool(a["move_numbers"])
         changed["move_numbers"] = h.katrain.show_move_num
+    if a.get("zoom") is not None or a.get("hide_frame") is not None:
+        zoom, hidden = board.zoom_region, board.hidden_coords
+        ts = h.state.tsumego
+        if a.get("zoom") is not None:
+            spec = str(a["zoom"]).strip().lower()
+            if spec in ("off", "false", "none", ""):
+                zoom = None
+            elif spec == "auto":
+                if ts is None:
+                    raise ApiError("no_tsumego", "zoom=auto needs a loaded tsumego problem; give a region like C3:G7")
+                zoom = ts.view_region
+            else:
+                zoom = parse_region(a["zoom"], h.game.board_size)
+        if a.get("hide_frame") is not None:
+            hidden = (ts.frame_coords if ts else set()) if _bool(a["hide_frame"]) else set()
+        set_zoom(board, zoom, hidden)
+        changed["zoom"] = region_json(zoom)
+        changed["hidden_stones"] = len(hidden)
     h.refresh()
     state = {key: controls.ids[widget_id].active for key, widget_id in VIEW_TOGGLES.items()}
     state["move_numbers"] = h.katrain.show_move_num
+    state["zoom"] = region_json(board.zoom_region)
+    state["hidden_stones"] = len(board.hidden_coords)
     return {"changed": changed, "view": state}
 
 

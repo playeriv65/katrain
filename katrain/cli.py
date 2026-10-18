@@ -383,6 +383,8 @@ def build_parser():
     p = cmd("view", "toggle display layers")
     for name in ("hints", "ownership", "policy", "eval", "children", "move-numbers"):
         p.add_argument(f"--{name}", type=_on_off, metavar="on|off")
+    p.add_argument("--zoom", metavar="C3:G7|auto|off", help="show only part of the board (auto: the tsumego problem)")
+    p.add_argument("--hide-frame", type=_on_off, metavar="on|off", help="hide the tsumego frame stones")
     p = cmd("mode", "switch play / analyze mode")
     p.add_argument("mode", choices=["play", "analyze"])
     p = cmd("message", "show a line in the status bar")
@@ -410,8 +412,9 @@ def build_parser():
     q.add_argument("--set", dest="set_", help="only problems whose collection/folder contains this text")
     q.add_argument("--difficulty", help="only problems with this difficulty label")
     q.add_argument("--limit", type=int, default=200)
-    q = s.add_parser("load", help="load a problem and set up frame + local search")
+    q = s.add_parser("load", help="load a problem: frame + local search, zoomed view with the frame hidden")
     q.add_argument("source", help="SGF file or folder")
+    q.add_argument("--no-zoom", action="store_true", help="keep the full-board view")
     q.add_argument("--index", "-i", type=int, default=0, help="problem index from 'tsumego list'")
     q.add_argument("--set", dest="set_")
     q.add_argument("--difficulty")
@@ -641,6 +644,8 @@ def to_api(a):
                 "eval": a.eval,
                 "children": a.children,
                 "move_numbers": a.move_numbers,
+                "zoom": a.zoom,
+                "hide_frame": a.hide_frame,
             },
             None,
         )
@@ -675,6 +680,7 @@ def to_api(a):
                     "frame": not a.no_frame,
                     "margin": a.margin,
                     "ko": a.ko,
+                    "zoom": not a.no_zoom,
                 },
                 None,
             )
