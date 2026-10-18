@@ -1,16 +1,17 @@
-"""Background analysis sandboxes: private copies of a position that the user never sees.
+"""Background exploration cursors ("sandboxes") inside the user's own game tree.
 
-The agent can play out and analyze variations here while the user keeps using the board. Nothing in a sandbox
-touches the GUI: no navigation, no nodes in the user's game tree, no overlays, and its KataGo queries run below
-the GUI's own priority. `sandbox.show` is the one explicit step that brings a line to the user's board.
+A sandbox is a cursor of the agent's, separate from the position the GUI shows. Moves the agent plays become
+ordinary variations in the user's game, and every analysis is stored in those nodes, so nothing computed in the
+background is thrown away: the user can browse the lines and their evaluations later without re-analysis.
+What the sandbox never does is move the user's board, draw overlays, or outrank the GUI's own queries.
+`sandbox.show` is the explicit step that brings a line to the user's attention.
 """
 
-import copy
 import itertools
 
 from pysgf import Move
 
-from katrain.api.commands import _bool, _int, _show_pv, cmd_demo_start, command, on_main
+from katrain.api.commands import _bool, _int, _show_pv, command, on_main
 from katrain.api.model import (
     analysis_json,
     board_json,
@@ -21,48 +22,33 @@ from katrain.api.model import (
     parse_moves,
 )
 from katrain.api.protocol import ApiError
-from katrain.core.game_node import GameNode
 
 _ids = itertools.count(1)
-DROPPED_PROPERTIES = ("C", "KT")  # comments and embedded analysis are not needed in a private copy
 
 
 class Sandbox:
     def __init__(self, sid, origin):
         self.id = sid
-        self.origin = origin  # node in the user's game this sandbox branched from
-        self.user_root = origin.root
-        self.root, self.base = clone_path(origin)
-        self.cursor = self.base
+        self.origin = origin  # node of the user's game the exploration starts from
+        self.root = origin.root
+        self.cursor = origin
 
     def line(self):
-        """Moves played in the sandbox after the origin, up to the cursor."""
-        nodes = self.cursor.nodes_from_root[len(self.base.nodes_from_root) :]
-        return [n.move for n in nodes if n.move]
+        """Nodes after the origin up to the cursor."""
+        return self.cursor.nodes_from_root[len(self.origin.nodes_from_root) :]
 
     def summary(self):
-        moves = self.line()
+        nodes = self.line()
         return {
             "id": self.id,
             "from": node_ref(self.origin),
             "from_move_number": self.origin.depth,
-            "moves": [f"{m.player}:{m.gtp()}" for m in moves],
+            "moves": [f"{n.move.player}:{n.move.gtp()}" for n in nodes if n.move],
+            "nodes": [node_ref(n) for n in nodes],
+            "at": node_ref(self.cursor),
             "move_number": self.cursor.depth,
             "to_move": self.cursor.next_player,
         }
-
-
-def clone_path(origin):
-    """Copy root -> origin into a detached tree. Returns (root, copy of origin)."""
-    path = origin.nodes_from_root
-    clones = []
-    for src in path:
-        props = {k: copy.deepcopy(v) for k, v in src.properties.items() if k not in DROPPED_PROPERTIES}
-        clones.append(GameNode(parent=clones[-1] if clones else None, properties=props))
-    base = clones[-1]
-    base.analysis = copy.deepcopy(origin.analysis)  # reuse what KaTrain already computed
-    base.analysis_visits_requested = origin.analysis_visits_requested
-    return clones[0], base
 
 
 def _sandboxes(h):
@@ -75,12 +61,20 @@ def _get(h, a):
     sb = _sandboxes(h).get(str(a.get("id") or ""))
     if sb is None:
         raise ApiError("not_found", f"no sandbox '{a.get('id')}'", available=sorted(_sandboxes(h)))
+    if h.game.root is not sb.root:
+        raise ApiError("game_changed", "the user's board shows a different game than this sandbox belongs to")
+    if sb.cursor not in sb.root.nodes_in_tree:
+        raise ApiError("not_found", "the sandbox position was deleted from the game")
     return sb
+
+
+def _redraw_tree(h):
+    h.katrain.controls.move_tree.redraw_tree_trigger()
 
 
 @command("sandbox.new")
 def cmd_sandbox_new(h, a):
-    """Copy the position at a node of the user's game (default: current) into a hidden sandbox."""
+    """Start a background cursor at a node of the user's game (default: the position the user is viewing)."""
     origin = h.node(a, "from")
     sid = str(a.get("name") or f"s{next(_ids)}")
     if sid in _sandboxes(h):
@@ -92,26 +86,25 @@ def cmd_sandbox_new(h, a):
 
 @command("sandbox.play")
 def cmd_sandbox_play(h, a):
-    """Play moves in a sandbox (never touches the user's board)."""
+    """Play moves at the sandbox cursor. They are kept as variations in the user's game; the board does not move."""
     sb = _get(h, a)
     cur = sb.cursor
     start_player = parse_color(a.get("color")) or cur.next_player
     moves = parse_moves(a.get("moves") or [], cur.board_size, start_player)
     if not moves:
         raise ApiError("bad_argument", "no moves given")
-    check_moves_legal(cur, moves)
-    for move in moves:
-        cur = cur.play(move)
-    sb.cursor = cur
-    return {**sb.summary(), "board": board_json(cur)["ascii"]}
+    nodes, created = h.add_nodes(cur, moves, analyze="none")  # validates legality first
+    sb.cursor = nodes[-1]
+    _redraw_tree(h)
+    return {**sb.summary(), "created_nodes": created, "board": board_json(sb.cursor)["ascii"]}
 
 
 @command("sandbox.back")
 def cmd_sandbox_back(h, a):
-    """Take back n moves in a sandbox (not past the position it was copied from)."""
+    """Move the sandbox cursor back n moves (not past where it started)."""
     sb = _get(h, a)
     for _ in range(_int(a, "n", 1, minimum=1)):
-        if sb.cursor is sb.base:
+        if sb.cursor is sb.origin:
             break
         sb.cursor = sb.cursor.parent
     return {**sb.summary(), "board": board_json(sb.cursor)["ascii"]}
@@ -119,14 +112,15 @@ def cmd_sandbox_back(h, a):
 
 @command("sandbox.board")
 def cmd_sandbox_board(h, a):
-    """Board of a sandbox at its current move."""
+    """Board at the sandbox cursor."""
     sb = _get(h, a)
     return {**sb.summary(), **board_json(sb.cursor)}
 
 
 @command("sandbox.analyze", main=False)
 def cmd_sandbox_analyze(h, a):
-    """Analyze a sandbox position (low priority, invisible); moves=[...] compares specific candidates."""
+    """Analyze the sandbox position at low priority; results are stored in the user's game. moves=[...] compares
+    candidate moves (stored in the node's candidate list like KaTrain's own analysis)."""
     timeout = _int(a, "timeout", 300, minimum=1)
 
     def prepare():
@@ -157,54 +151,51 @@ def cmd_sandbox_analyze(h, a):
     result = on_main(lambda: analysis_json(node, **view))
     if moves:
         result["candidates"].sort(key=lambda c: c["points_lost"] if c["points_lost"] is not None else 1e9)
-    result.pop("node", None)  # sandbox node ids are not addressable in the user's game
     return {"sandbox": sb.summary(), "reused_existing": cached and not moves, "requested_visits": visits, **result}
 
 
 @command("sandbox.show")
 def cmd_sandbox_show(h, a):
-    """Bring a sandbox line to the user's board: as=pv (numbered-stone overlay, default) or as=demo (real moves
-    inside demo mode, removed again by demo.end). step=N shows only the first N moves."""
+    """Bring a sandbox line to the user's board: as=pv (numbered-stone overlay from the start, default) or as=goto
+    (move the user's board to the sandbox position). step=N limits the PV to its first N moves."""
     sb = _get(h, a)
-    if h.game.root is not sb.user_root:
-        raise ApiError("game_changed", "the user's board shows a different game than this sandbox came from")
-    if sb.origin not in h.game.root.nodes_in_tree:
-        raise ApiError("not_found", "the position this sandbox came from was deleted from the game")
-    moves = sb.line()
-    if not moves:
+    nodes = sb.line()
+    if not nodes:
         raise ApiError("bad_argument", "the sandbox has no moves yet")
-    step = _int(a, "step", minimum=1)
-    if a.get("as", "pv") == "demo":
-        started = h.state.demo is None
-        if started:
-            cmd_demo_start(h, {"label": f"sandbox {sb.id}"})
-        nodes, _ = h.add_nodes(sb.origin, moves)
-        h.goto(nodes[min(step, len(nodes)) - 1] if step else nodes[-1])
-        return {
-            "shown": "demo",
-            "demo_started": started,
-            "moves": [f"{m.player}:{m.gtp()}" for m in moves],
-            "hint": "katrain demo end removes these moves again",
-            **h.current_json(),
-        }
-    return {"shown": "pv", **_show_pv(h, sb.origin, moves, step)}
+    if a.get("as", "pv") == "goto":
+        h.goto(sb.cursor)
+        return {"shown": "goto", **h.current_json()}
+    moves = [n.move for n in nodes if n.move]
+    return {"shown": "pv", **_show_pv(h, sb.origin, moves, _int(a, "step", minimum=1))}
 
 
 @command("sandbox.list")
 def cmd_sandbox_list(h, a):
-    """All sandboxes."""
+    """All sandboxes of the current game."""
     root = h.game.root
-    return [{**sb.summary(), "same_game": sb.user_root is root} for sb in _sandboxes(h).values()]
+    return [sb.summary() for sb in _sandboxes(h).values() if sb.root is root]
 
 
 @command("sandbox.drop")
 def cmd_sandbox_drop(h, a):
-    """Delete a sandbox (or all with id=all)."""
+    """Forget a sandbox (id=all for every one). prune=true also deletes the variations it added, as long as they
+    contain only API-created nodes and nobody is looking at them."""
     boxes = _sandboxes(h)
-    if a.get("id") == "all":
-        n = len(boxes)
-        boxes.clear()
-        return {"dropped": n}
-    _get(h, a)
-    del boxes[str(a["id"])]
-    return {"dropped": 1}
+    targets = list(boxes.values()) if a.get("id") == "all" else [_get(h, a)]
+    pruned = 0
+    if _bool(a.get("prune")):
+        current = h.game.current_node
+        for sb in targets:
+            if sb.root is not h.game.root:
+                continue
+            first_added = next((n for n in sb.line() if n in h.state.created), None)
+            if first_added is None or first_added.parent is None:
+                continue
+            subtree = first_added.nodes_in_tree
+            if all(n in h.state.created for n in subtree) and current not in subtree:
+                first_added.parent.children.remove(first_added)
+                pruned += len(subtree)
+        _redraw_tree(h)
+    for sb in targets:
+        boxes.pop(sb.id, None)
+    return {"dropped": len(targets), "pruned_nodes": pruned}

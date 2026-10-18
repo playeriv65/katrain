@@ -434,12 +434,14 @@ def build_parser():
     q.add_argument("--visits", "-v", type=int)
     s.add_parser("status")
 
-    p = cmd("sandbox", "background analysis on private copies; the user's board is never touched (until 'show')")
+    p = cmd(
+        "sandbox", "background exploration: lines and analysis are kept in the user's game, the board does not move"
+    )
     s = p.add_subparsers(dest="sub", metavar="ACTION", required=True)
-    q = s.add_parser("new", help="copy a position of the user's game into a hidden sandbox")
+    q = s.add_parser("new", help="start a background cursor at a position of the user's game")
     q.add_argument("--from", dest="from_", help="node to copy (default: the user's current position)")
     q.add_argument("--name", help="sandbox id (default s1, s2, ...)")
-    q = s.add_parser("play", help="play moves in a sandbox")
+    q = s.add_parser("play", help="play moves at the cursor (kept as a variation, board does not move)")
     q.add_argument("id")
     q.add_argument("moves", nargs="+")
     q.add_argument("--color", help="color of the first move")
@@ -460,11 +462,14 @@ def build_parser():
     q.add_argument("--force", action="store_true")
     q = s.add_parser("show", help="bring a sandbox line to the user's board")
     q.add_argument("id")
-    q.add_argument("--as", dest="as_", choices=["pv", "demo"], default="pv")
+    q.add_argument(
+        "--as", dest="as_", choices=["pv", "goto"], default="pv", help="pv overlay, or move the user's board there"
+    )
     q.add_argument("--step", type=int, help="show only the first N moves")
     s.add_parser("list", help="list sandboxes")
-    q = s.add_parser("drop", help="delete a sandbox (or 'all')")
+    q = s.add_parser("drop", help="forget a sandbox (or 'all'); --prune also deletes the variations it added")
     q.add_argument("id")
+    q.add_argument("--prune", action="store_true", help="delete the sandbox's API-created variations")
     _accept_global_options_everywhere(parser)
     return parser
 
@@ -708,7 +713,7 @@ def to_api(a):
         if sub == "show":
             return "sandbox.show", {"id": a.id, "as": a.as_, "step": a.step}, None
         if sub == "drop":
-            return "sandbox.drop", {"id": a.id}, None
+            return "sandbox.drop", {"id": a.id, "prune": a.prune}, None
         return "sandbox.list", {}, None
     raise ValueError(f"unhandled command {c} {sub}")
 
