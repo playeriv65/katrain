@@ -34,7 +34,7 @@ dependencies = [
 Homepage = "https://github.com/sanderland/katrain"
 
 [project.scripts]
-katrain = "katrain.__main__:run_app"
+katrain = "katrain.cli:main"
 
 [dependency-groups]
 dev = [

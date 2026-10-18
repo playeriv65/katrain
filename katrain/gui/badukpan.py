@@ -16,6 +16,7 @@ from kivy.uix.dropdown import DropDown
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.widget import Widget
 
+from katrain.api.overlay import draw_api_overlay
 from katrain.core.constants import (
     MODE_PLAY,
     OUTPUT_DEBUG,
@@ -55,6 +56,7 @@ class BadukPanWidget(Widget):
         self.active_pv_moves = []
         self.animating_pv = None
         self.animating_pv_index = None
+        self.pv_pinned = False  # PV shown via the API: survives mouse hover, cleared by clicks
         self.last_mouse_pos = (0, 0)
         Window.bind(mouse_pos=self.on_mouse_pos)
         self.redraw_board_contents_trigger = Clock.create_trigger(self.draw_board_contents, 0.05)
@@ -147,7 +149,7 @@ class BadukPanWidget(Widget):
             rel_pos = self.to_widget(*pos)  # compensate for relative layout
             inside = self.collide_point(*rel_pos)
 
-            if inside and self.active_pv_moves and not self.selecting_region_of_interest:
+            if inside and self.active_pv_moves and not self.selecting_region_of_interest and not self.pv_pinned:
                 near_move = [
                     (pv, node)
                     for move, pv, node in self.active_pv_moves
@@ -160,7 +162,7 @@ class BadukPanWidget(Widget):
                     self.set_animating_pv(near_move[0][0], near_move[0][1])
                 elif self.animating_pv is not None:
                     self.set_animating_pv(None, None)  # any click kills PV from label/move
-            if inside and self.animating_pv is not None:
+            if inside and self.animating_pv is not None and not self.pv_pinned:
                 d_sq = (pos[0] - self.animating_pv[3][0]) ** 2 + (pos[1] - self.animating_pv[3][1])
                 if d_sq > 2 * self.stone_size**2:  # move too far from where it was activated
                     self.set_animating_pv(None, None)  # any click kills PV from label/move
@@ -1091,6 +1093,8 @@ class BadukPanWidget(Widget):
                 Color(*Theme.PASS_CIRCLE_TEXT_COLOR)
                 draw_text(pos=center, text=text, font_size=size * 0.25, halign="center")
 
+            draw_api_overlay(self)
+
     def animate_pv(self, _dt):
         if self.animating_pv:
             self.redraw_hover_contents_trigger()
@@ -1140,6 +1144,7 @@ class BadukPanWidget(Widget):
         if not self.katrain.config("general/anim_pv_moves"):
             pv = None  # animating sequences on hover is switched off
         self.animating_pv_index = None
+        self.pv_pinned = False
         if pv is None:
             self.animating_pv = None
         elif node is not None and (

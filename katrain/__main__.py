@@ -216,6 +216,10 @@ class KaTrainGui(Screen, KaTrainBase):
 
         App.get_running_app().root_window.bind(focus=set_focus_event)
 
+        from katrain.api.server import start_api_server
+
+        self.api_server = start_api_server(self)
+
     def restart_engine(self):
         """Rebuild the analysis engine from current config and re-analyze.
         Shared by the engine-settings save and the recovery popup's Retry."""
@@ -975,6 +979,8 @@ class KaTrainApp(App):
             self.gui._config["ui_state"]["top"] = Window.top
             self.gui._config["ui_state"]["left"] = Window.left
             self.gui.save_config("ui_state")
+            if getattr(self.gui, "api_server", None):
+                self.gui.api_server.stop()
             if self.gui.engine:
                 self.gui.engine.shutdown(finish=None)
 
