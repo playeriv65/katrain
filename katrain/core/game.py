@@ -454,6 +454,7 @@ class Game(BaseGame):
         self.insert_mode = False
         self.insert_after = None
         self.region_of_interest = None
+        self.region_root = False  # region analysis also sets the node evaluation (set by the tsumego frame)
 
         threading.Thread(
             target=lambda: self.analyze_all_nodes(analyze_fast=analyze_fast, even_if_present=False),
@@ -557,7 +558,11 @@ class Game(BaseGame):
         if played_node is None:
             return None
         if analyze:
-            if self.region_of_interest:
+            if self.region_of_interest and self.region_root:
+                played_node.analyze(
+                    self.engines[played_node.next_player], region_of_interest=self.region_of_interest, region_root=True
+                )
+            elif self.region_of_interest:
                 played_node.analyze(self.engines[played_node.next_player], analyze_fast=True)
                 played_node.analyze(self.engines[played_node.next_player], region_of_interest=self.region_of_interest)
             else:
@@ -594,6 +599,7 @@ class Game(BaseGame):
                 ponder=True,
                 priority=PRIORITY_EXTRA_ANALYSIS,
                 region_of_interest=self.region_of_interest,
+                region_root=self.region_root,
                 time_limit=False,
             )
             return
@@ -606,6 +612,7 @@ class Game(BaseGame):
                 visits=visits,
                 priority=PRIORITY_EXTRA_ANALYSIS,
                 region_of_interest=self.region_of_interest,
+                region_root=self.region_root,
                 time_limit=False,
             )
             return

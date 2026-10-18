@@ -573,7 +573,12 @@ class KaTrainGui(Screen, KaTrainBase):
                 analysis_region[1][0],
             ]
             self.game.set_region_of_interest(flattened_region)
-        node.analyze(self.game.engines[node.next_player])
+            self.game.region_root = True
+            node.analyze(
+                self.game.engines[node.next_player], region_of_interest=self.game.region_of_interest, region_root=True
+            )
+        else:
+            node.analyze(self.game.engines[node.next_player])
         self.update_state(redraw_board=True)
 
     def play_mistake_sound(self, node):

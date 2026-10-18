@@ -24,6 +24,7 @@ from katrain.api.model import (
 from katrain.api.protocol import ApiError
 from katrain.core.game import KaTrainSGF
 from katrain.core.game_node import GameNode
+from katrain.core.tsumego_frame import near_to_edge
 from katrain.gui.zoomview import set_zoom
 
 LEVEL_WORDS = (
@@ -48,9 +49,9 @@ ALIVE, DEAD = 0.5, -0.5
 # -- problem collections --------------------------------------------------------
 
 
-def split_collection(text):
-    """Split an SGF collection '(;...)(;...)' into its top-level game trees."""
-    trees, depth, start, in_value, escape = [], 0, None, False, False
+def _group_spans(text):
+    """(start, end) of every top-level '(...)' group in SGF text, skipping property values."""
+    spans, depth, start, in_value, escape = [], 0, None, False, False
     for i, ch in enumerate(text):
         if in_value:
             if escape:
@@ -68,14 +69,68 @@ def split_collection(text):
         elif ch == ")":
             depth -= 1
             if depth == 0 and start is not None:
-                trees.append(text[start : i + 1])
+                spans.append((start, i))
                 start = None
-    return trees
+    return spans
+
+
+def split_collection(text):
+    """Split an SGF collection '(;...)(;...)' into its top-level game trees."""
+    return [text[s : e + 1] for s, e in _group_spans(text)]
 
 
 def _prop(text, name):
     m = re.search(rf"(?<![A-Z]){name}\[((?:[^\]\\]|\\.)*)\]", text)
     return m[1] if m else None
+
+
+def _strip_prop(text, name):
+    return re.sub(rf"(?<![A-Z]){name}(\[(?:[^\]\\]|\\.)*\])+", "", text)
+
+
+def _has_stones(text):
+    return _prop(text, "AB") is not None or _prop(text, "AW") is not None
+
+
+def _first_node(tree):
+    """Text of the first node of a '(;...)' tree."""
+    body = tree[1:-1].lstrip()
+    spans = _group_spans(body)
+    seq = body[: spans[0][0]] if spans else body
+    return seq.split(";")[1] if ";" in seq else seq  # values with ';' only cut the text we search, harmless
+
+
+def problem_texts(text):
+    """Every problem in an SGF file as (header comment, problem SGF).
+
+    Handles single problems, collections of game trees '(;...)(;...)', and collections stored as variations of
+    one stone-less root, one problem per variation (e.g. the tsumego.tasuki.org books). Variation problems get
+    the root's properties (SZ etc.) merged into their own first node."""
+    problems = []
+    for tree in split_collection(text) or [text]:
+        body = tree.strip()[1:-1]
+        spans = _group_spans(body)
+        head = body[: spans[0][0]] if spans else body
+        children = [body[s : e + 1] for s, e in spans]
+        if _has_stones(head) or len([c for c in children if _has_stones(_first_node(c))]) < 2:
+            problems.append((None, tree))
+            continue
+        header = (_prop(head, "C") or "").strip().split("\n")[0]
+        root_props = _strip_prop(_strip_prop(head.strip(), "C"), "GN").lstrip(";")
+        for child in children:
+            if _has_stones(_first_node(child)):
+                child_body = child[1:-1].lstrip()
+                problems.append((header, f"(;{root_props}{child_body[1:]})"))
+    return problems
+
+
+def _first_move_color(text):
+    m = re.search(r"(?<![A-Za-z\\])([BW])\[[a-zA-Z]{0,2}\]", text)
+    return m[1] if m else None
+
+
+def _first_comment_line(tree):
+    return (_prop(_first_node(tree), "C") or "").strip().split("\n")[0].strip()
 
 
 def _read(path):
@@ -88,22 +143,30 @@ def _read(path):
             continue
 
 
-def _difficulty(text, path):
+def _difficulty(text, path, header=None):
     di = _prop(text, "DI")
     if di:
         return di
-    hay = f"{path} {_prop(text, 'GN') or ''} {_prop(text, 'GC') or ''}".lower()
+    hay = f"{path} {_prop(text, 'GN') or ''} {_prop(text, 'GC') or ''} {header or ''}".lower()
     m = re.search(r"(\d{1,2}\s?[kd])(?![a-z])", hay)
     if m:
         return m[1].replace(" ", "")
     return next((w for w in LEVEL_WORDS if w in hay), None)
 
 
+def _natural_key(path):
+    """Sort 'p-2' before 'p-10'."""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower()) for t in re.split(r"(\d+)", path)]
+
+
 def scan_problems(source):
     """All problems in a file or folder, as metadata dicts (in a stable order)."""
     source = os.path.abspath(os.path.expanduser(source))
     if os.path.isdir(source):
-        files = sorted(os.path.join(d, f) for d, _, fs in os.walk(source) for f in fs if f.lower().endswith(".sgf"))
+        files = sorted(
+            (os.path.join(d, f) for d, _, fs in os.walk(source) for f in fs if f.lower().endswith(".sgf")),
+            key=_natural_key,
+        )
         base = source
     elif os.path.isfile(source):
         files, base = [source], os.path.dirname(source)
@@ -114,18 +177,24 @@ def scan_problems(source):
         text = _read(path)
         if text is None:
             continue
-        rel = os.path.relpath(path, base)
-        trees = split_collection(text) or [text]
-        for j, tree in enumerate(trees):
+        rel = os.path.relpath(path, base).replace(os.sep, "/")
+        stem = os.path.splitext(os.path.basename(path))[0]
+        trees = problem_texts(text)
+        collection = len(trees) > 1
+        for j, (header, tree) in enumerate(trees):
+            name = _prop(tree, "GN")
+            if not name and collection:
+                title = _first_comment_line(tree)
+                name = f"{stem}#{j + 1}" + (f" ({title})" if 0 < len(title) <= 40 else "")
             problems.append(
                 {
                     "file": path,
                     "tree_index": j,
-                    "set": os.path.dirname(rel) or os.path.splitext(os.path.basename(path))[0],
-                    "name": _prop(tree, "GN")
-                    or (os.path.splitext(os.path.basename(path))[0] + (f"#{j + 1}" if len(trees) > 1 else "")),
-                    "difficulty": _difficulty(tree, rel),
-                    "to_play": _prop(tree, "PL"),
+                    # a multi-problem file is a set of its own; single-problem files are grouped by folder
+                    "set": os.path.splitext(rel)[0] if collection else (os.path.dirname(rel) or stem),
+                    "name": name or stem,
+                    "difficulty": _difficulty(tree, rel, header),
+                    "to_play": _prop(tree, "PL") or _first_move_color(tree),
                 }
             )
     return problems
@@ -214,6 +283,21 @@ def problem_view_region(problem_root):
     return [xmin, xmax, ymin, ymax]
 
 
+def is_center_problem(problem_root):
+    """No problem stone near any edge (same 'near' as KaTrain's tsumego frame)."""
+    szx, szy = problem_root.board_size
+    coords = [m.coords for m in problem_root.placements if m.coords is not None]
+    if not coords:
+        return False
+    xs, ys = [c[0] for c in coords], [c[1] for c in coords]
+    return (
+        min(xs) > near_to_edge
+        and min(ys) > near_to_edge
+        and max(xs) < szx - 1 - near_to_edge
+        and max(ys) < szy - 1 - near_to_edge
+    )
+
+
 class TsumegoState:
     def __init__(self, meta, solution_root, problem_root, start_node, region, to_play):
         self.meta = meta
@@ -243,6 +327,7 @@ class TsumegoState:
             "to_play": self.to_play,
             "goal": self.goal,
             "target_group": gtp(self.group) if self.group else None,
+            "frame": self.start is not self.problem_root,
             "region": region_json(self.region),
             "has_reference_solution": bool(self.solution_root.children),
             "attempts": self.attempts,
@@ -310,7 +395,7 @@ def _evaluate(h, ts, node, visits, timeout):
     if node in ts.evals and ts.evals[node]["visits"] >= visits * 0.9:
         return ts.evals[node]
     engine = on_main(lambda: h.engine_for(node))
-    raw = h.search(node, engine, visits, region=ts.region, timeout=timeout, ownership=True)
+    raw = h.search(node, engine, visits, region=ts.region, timeout=timeout, ownership=True, region_root=True)
     ts.evals[node] = _summarise(raw, node)
     return ts.evals[node]
 
@@ -343,6 +428,22 @@ def _goal_met(ts, status):
     if ts.goal == "kill":
         return status["status"] in ("dead", "captured")
     return status["status"] == "alive"
+
+
+MISTAKE = (0.10, 3.0)  # winrate lost, points lost
+INACCURACY = (0.03, 1.0)
+
+
+def _verdict(was_best, winrate_lost, score_lost):
+    """best / ok / inaccuracy / mistake. Score counts as much as winrate: when the frame leaves one side far
+    ahead or behind, winrates sit near 0 or 1 and barely move even for losing moves."""
+    if was_best:
+        return "best"
+    if winrate_lost >= MISTAKE[0] or score_lost >= MISTAKE[1]:
+        return "mistake"
+    if winrate_lost >= INACCURACY[0] or score_lost >= INACCURACY[1]:
+        return "inaccuracy"
+    return "ok"
 
 
 def _candidates(ts, ev, n=5):
@@ -391,9 +492,8 @@ def cmd_tsumego_load(h, a):
         raise ApiError("not_found", f"problem index {index} out of range ({len(problems)} problems)")
     meta = problems[index]
     text = _read(meta["file"])
-    trees = split_collection(text) or [text]
     try:
-        solution_root = KaTrainSGF.parse_sgf(trees[meta["tree_index"]])
+        solution_root = KaTrainSGF.parse_sgf(problem_texts(text)[meta["tree_index"]][1])
     except Exception as e:
         raise ApiError("sgf_parse_error", f"{meta['file']}: {e}")
     to_play = solution_root.initial_player
@@ -405,8 +505,15 @@ def cmd_tsumego_load(h, a):
         raise ApiError("bad_problem", "problem has no setup stones")
     backup = _load_tree(h, problem_root, fast=False, at_end=False)
     game = h.katrain.game
-    if _bool(a.get("frame"), True):
+    framed = _bool(a.get("frame"), not is_center_problem(game.root))
+    if framed:
         h.katrain._do_tsumego_frame(_bool(a.get("ko")), _int(a, "margin", 4, minimum=1))
+    else:
+        # center problems: KaTrain's frame would wall the group in; keep the open board, search locally
+        game.set_region_of_interest(problem_view_region(game.root))
+        game.region_root = True
+        root = game.root
+        root.analyze(game.engines[root.next_player], region_of_interest=game.region_of_interest, region_root=True)
     start = game.current_node
     region = game.region_of_interest
     ts = TsumegoState(
@@ -492,15 +599,18 @@ def cmd_tsumego_try(h, a):
     wr_after = after["black_winrate"] if mover_sign == 1 else 1 - after["black_winrate"]
     best = before["moves"][0] if before["moves"] else None
     status = _group_status(ts, node, after)
+    winrate_lost = wr_before - wr_after
+    score_lost = mover_sign * (before["black_score"] - after["black_score"])
     result = {
         "move": f"{move.player}:{move.gtp()}",
         "node": node_ref(node),
         "mover_winrate_before": round(wr_before, 4),
         "mover_winrate_after": round(wr_after, 4),
-        "winrate_lost": round(wr_before - wr_after, 4),
-        "score_lost": round(mover_sign * (before["black_score"] - after["black_score"]), 2),
+        "winrate_lost": round(winrate_lost, 4),
+        "score_lost": round(score_lost, 2),
         "best_move": best and best["move"],
         "was_best_move": bool(best and best["move"] == move.gtp()),
+        "verdict": _verdict(best and best["move"] == move.gtp(), winrate_lost, score_lost),
         "target": status,
         "goal_met": _goal_met(ts, status) if move.player == ts.to_play else None,
         "better_moves": _candidates(ts, before, 3),
@@ -521,7 +631,9 @@ def _play(h, parent, move, analyze=False):
     node = nodes[0]
     if analyze:
         ts = h.state.tsumego
-        node.analyze(h.game.engines[node.next_player], region_of_interest=ts.region if ts else None)
+        node.analyze(
+            h.game.engines[node.next_player], region_of_interest=ts.region if ts else None, region_root=bool(ts)
+        )
     h.goto(node)
     return node
 

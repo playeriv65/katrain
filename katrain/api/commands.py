@@ -277,18 +277,20 @@ class CommandHandler:
         max_time=None,
         ownership=None,
         background=False,
+        region_root=False,
     ):
         """Send one KataGo query, feed results into the node like the GUI does, and wait for the final one.
 
         background=True is for sandbox positions the user cannot see: below the GUI's own queries in priority,
-        no progress reports and no GUI refresh."""
+        no progress reports and no GUI refresh. region_root=True stores a region result as the node's evaluation
+        (see GameNode.analyze)."""
         if any(n.clear_placements for n in node.nodes_from_root):
             raise ApiError("unsupported_position", "positions with AE (cleared stones) cannot be analyzed")
         done, box = threading.Event(), {}
 
         def callback(result, partial):
             try:
-                node.set_analysis(result, refine_move, False, region, partial)
+                node.set_analysis(result, refine_move, False, None if region_root else region, partial)
             finally:
                 if not partial:
                     box["result"] = result

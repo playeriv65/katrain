@@ -913,8 +913,8 @@ class BadukPanWidget(Widget):
         next_player = current_node.next_player
 
         board_size_x, board_size_y = katrain.game.board_size
-        if len(self.gridpos[0]) < board_size_x or len(self.gridpos) < board_size_y:
-            return  # race condition
+        if not self.gridpos or len(self.gridpos[0]) < board_size_x or len(self.gridpos) < board_size_y:
+            return  # race condition, or grid not rebuilt yet after a zoom change
 
         with self.canvas.after:
             self.canvas.after.clear()

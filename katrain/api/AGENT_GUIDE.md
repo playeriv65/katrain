@@ -147,9 +147,17 @@ katrain tsumego reset                              # back to the start, attempt 
 
 `tsumego load` also zooms the board to the problem (like a book diagram) and hides the frame stones; KataGo still
 uses them. `katrain view --zoom off|auto|C3:G7 --hide-frame on|off` changes this; loading any other game resets it.
+Center problems (no stone near an edge) get no frame, since it would wall the group in; KataGo then searches the
+open board, restricted to the problem area. `--frame on|off` overrides this. In tsumego mode the local best move
+is the reference for the board hints, so the right answer shows no loss even when a frame move is bigger.
 
-`tsumego try` returns `winrate_lost`, `was_best_move`, `target.status`, `goal_met`, `better_moves` and
-`refutation_pv` (KataGo's punishment line after a wrong move — show it with `pv show --from <node> ...`).
+`tsumego try` returns `verdict` (best/ok/inaccuracy/mistake), `winrate_lost`, `score_lost`, `was_best_move`,
+`target.status`, `goal_met`, `better_moves` and `refutation_pv` (KataGo's punishment line after a wrong move —
+show it with `pv show --from <node> ...`). Judge by `verdict` or `score_lost`, not winrate alone: the frame can
+leave one side far ahead, and then winrates stay near 0% or 100% even after a losing move.
+
+Collections stored as many problems in one SGF (one problem per variation of the root, or several game trees)
+are split into single problems; such a file is listed as a set of its own (`--set cho-1`).
 
 ## Good habits
 

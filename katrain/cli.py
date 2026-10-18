@@ -71,6 +71,27 @@ def health(port=None, timeout=3):
 # -- launching the GUI ---------------------------------------------------------
 
 
+def _older_user_config():
+    """Error dict if ~/.katrain/config.json belongs to an older KaTrain (e.g. an installed release next to this
+    source build): KaTrain would replace that file with its package defaults on startup."""
+    from katrain.core.constants import CONFIG_MIN_VERSION
+
+    path = os.path.join(DATA_FOLDER, "config.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            version = json.load(f)["general"]["version"]
+        older = [int(v) for v in version.split(".")] < [int(v) for v in CONFIG_MIN_VERSION.split(".")]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None  # missing or unreadable: KaTrain creates or repairs it, nothing to lose
+    if not older:
+        return None
+    return {
+        "code": "config_conflict",
+        "message": f"{path} is a KaTrain {version} config; this build ({CONFIG_MIN_VERSION}) would overwrite it",
+        "hint": "pass --config <file> or set KATRAIN_CONFIG to a separate config.json for this build",
+    }
+
+
 def launch_gui(config=None, sgf=None, wait=True, timeout=90):
     try:
         if health().get("ok"):
@@ -78,6 +99,10 @@ def launch_gui(config=None, sgf=None, wait=True, timeout=90):
     except NotRunning:
         pass
     config = config or os.environ.get("KATRAIN_CONFIG")
+    if not config:
+        conflict = _older_user_config()
+        if conflict:
+            return {"ok": False, "error": conflict}
     python = sys.executable
     if os.name == "nt":
         # pythonw has no console: launching python.exe detached makes the venv launcher's child open a new
@@ -418,7 +443,12 @@ def build_parser():
     q.add_argument("--index", "-i", type=int, default=0, help="problem index from 'tsumego list'")
     q.add_argument("--set", dest="set_")
     q.add_argument("--difficulty")
-    q.add_argument("--no-frame", action="store_true", help="skip KaTrain's tsumego frame")
+    q.add_argument(
+        "--frame",
+        type=_on_off,
+        metavar="on|off",
+        help="KaTrain's tsumego frame (default: on, off for center problems)",
+    )
     q.add_argument("--margin", type=int, default=4)
     q.add_argument("--ko", action="store_true", help="frame with ko threats")
     q = s.add_parser("target", help="set goal and target group")
@@ -677,7 +707,7 @@ def to_api(a):
                     "index": a.index,
                     "set": a.set_,
                     "difficulty": a.difficulty,
-                    "frame": not a.no_frame,
+                    "frame": a.frame,
                     "margin": a.margin,
                     "ko": a.ko,
                     "zoom": not a.no_zoom,
