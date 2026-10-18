@@ -78,6 +78,7 @@ class ApiServer:
         from katrain.api.commands import CommandHandler  # imports Kivy-side modules
 
         importlib.import_module("katrain.api.tsumego")  # registers the tsumego commands
+        importlib.import_module("katrain.api.sandbox")  # registers the background sandbox commands
         self.katrain = katrain
         self.token = secrets.token_urlsafe(24)
         self.handler = CommandHandler(katrain)

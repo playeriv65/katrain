@@ -10,6 +10,7 @@ import itertools
 import os
 import threading
 import time
+import urllib.parse
 import weakref
 from datetime import datetime
 
@@ -43,6 +44,7 @@ from katrain.core.constants import MODE_ANALYZE, MODE_PLAY, PRIORITY_EXTRA_ANALY
 from katrain.core.game import KaTrainSGF
 
 COMMANDS = {}
+BACKGROUND_PRIORITY = -50  # below KaTrain's interactive queries (PRIORITY_DEFAULT=1000), above game re-analysis
 ENGINE_SETTINGS = {"max_visits": int, "fast_visits": int, "max_time": float, "wide_root_noise": float}
 VIEW_TOGGLES = {
     "hints": "hints",
@@ -207,12 +209,22 @@ class CommandHandler:
 
     def capture(self):
         game, k = self.game, self.katrain
+        board = k.board_gui
+        pv = None
+        if board.animating_pv is not None and board.pv_pinned:  # only API-shown PVs, not mouse hovers
+            pv = {
+                "moves": list(board.animating_pv[0]),
+                "node": board.animating_pv[1],
+                "index": board.animating_pv_index,
+            }
         return {
             "root": game.root,
             "node": game.current_node,
             "mode": k.play_analyze_mode,
             "region": copy.copy(game.region_of_interest),
             "marks": copy.deepcopy(self.state.marks),
+            "pv": pv,
+            "message": k.controls.status_state[0] or "",
             "time": time.time(),
         }
 
@@ -228,6 +240,13 @@ class CommandHandler:
         self.goto(node)
         game.region_of_interest = copy.copy(snap["region"])
         self.set_mode(snap["mode"])
+        pv = snap.get("pv")
+        if pv and pv["node"] in tree:
+            board = self.katrain.board_gui
+            board.animating_pv = (pv["moves"], pv["node"], time.time(), board.last_mouse_pos)
+            board.animating_pv_index = pv["index"]
+            board.pv_pinned = True
+        self.katrain.controls.set_status(snap.get("message", ""), STATUS_INFO, check_level=False)
         self.refresh()
 
     @staticmethod
@@ -238,13 +257,30 @@ class CommandHandler:
             "move_number": snap["node"].depth,
             "mode": snap["mode"],
             "marks": len(snap["marks"]),
+            "pv": snap["pv"]["moves"] if snap.get("pv") else None,
+            "message": snap.get("message") or None,
+            "link": f"katrain://state/{urllib.parse.quote(name, safe='')}",
             "saved": datetime.fromtimestamp(snap["time"]).isoformat(timespec="seconds"),
         }
 
     # -- analysis plumbing (worker thread) --------------------------------
 
-    def search(self, node, engine, visits, region=None, refine_move=None, timeout=300, max_time=None, ownership=None):
-        """Send one KataGo query, feed results into the node like the GUI does, and wait for the final one."""
+    def search(
+        self,
+        node,
+        engine,
+        visits,
+        region=None,
+        refine_move=None,
+        timeout=300,
+        max_time=None,
+        ownership=None,
+        background=False,
+    ):
+        """Send one KataGo query, feed results into the node like the GUI does, and wait for the final one.
+
+        background=True is for sandbox positions the user cannot see: below the GUI's own queries in priority,
+        no progress reports and no GUI refresh."""
         if any(n.clear_placements for n in node.nodes_from_root):
             raise ApiError("unsupported_position", "positions with AE (cleared stones) cannot be analyzed")
         done, box = threading.Event(), {}
@@ -269,8 +305,8 @@ class CommandHandler:
             time_limit=False,
             next_move=refine_move,
             region_of_interest=region,
-            priority=PRIORITY_EXTRA_ANALYSIS,
-            report_every=None if refine_move else REPORT_DT,
+            priority=BACKGROUND_PRIORITY if background else PRIORITY_EXTRA_ANALYSIS,
+            report_every=None if (refine_move or background) else REPORT_DT,
             extra_settings={"maxTime": max_time} if max_time else None,
             ownership=ownership,
         )
@@ -280,7 +316,8 @@ class CommandHandler:
             )
         if "error" in box:
             raise ApiError("engine_error", str(box["error"]))
-        self.katrain.update_state()
+        if not background:
+            self.katrain.update_state()
         return box["result"]
 
 
@@ -1115,7 +1152,7 @@ def cmd_message(h, a):
 
 @command("state.save")
 def cmd_state_save(h, a):
-    """Remember the current position, mode, region and marks under a name."""
+    """Remember the current position, mode, region, marks, shown PV and status text; returns a katrain:// link."""
     name = str(a.get("name") or "default")
     h.state.snapshots[name] = h.capture()
     return h.snapshot_json(name, h.state.snapshots[name])

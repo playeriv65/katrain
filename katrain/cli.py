@@ -78,7 +78,14 @@ def launch_gui(config=None, sgf=None, wait=True, timeout=90):
     except NotRunning:
         pass
     config = config or os.environ.get("KATRAIN_CONFIG")
-    cmd = [sys.executable, "-m", "katrain"]
+    python = sys.executable
+    if os.name == "nt":
+        # pythonw has no console: launching python.exe detached makes the venv launcher's child open a new
+        # console window (a Windows Terminal window that stays open for the whole GUI session).
+        pythonw = os.path.join(os.path.dirname(python), "pythonw.exe")
+        if os.path.isfile(pythonw):
+            python = pythonw
+    cmd = [python, "-m", "katrain"]
     if config:
         cmd.append(os.path.abspath(os.path.expanduser(config)))
     if sgf:
@@ -87,7 +94,7 @@ def launch_gui(config=None, sgf=None, wait=True, timeout=90):
     log_path = os.path.join(DATA_FOLDER, "gui.log")
     kwargs = {}
     if os.name == "nt":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     launched = time.time()
@@ -124,7 +131,7 @@ def launch_gui(config=None, sgf=None, wait=True, timeout=90):
 
 
 def link_to_command(url):
-    """katrain://goto/45, katrain://goto?node=n12, katrain://variation/v3?step=2&as=branch,
+    """katrain://state/<name>, katrain://goto/45, katrain://goto?node=n12, katrain://variation/v3?step=2&as=branch,
     katrain://pv?from=45&moves=D4,Q16&step=1, katrain://analysis?node=45"""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "katrain":
@@ -134,6 +141,8 @@ def link_to_command(url):
     q = {k: v[-1] for k, v in urllib.parse.parse_qs(parsed.query).items()}
     if action == "goto":
         return "nav.goto", {"node": target or q.get("node")}
+    if action == "state":
+        return "state.restore", {"name": urllib.parse.unquote(target or q.get("name") or "")}
     if action == "variation":
         return "variation.show", {"id": target or q.get("id"), "step": q.get("step"), "as": q.get("as")}
     if action == "pv":
@@ -146,6 +155,16 @@ def link_to_command(url):
     if action == "analysis":
         return "analysis.get", {"node": target or q.get("node")}
     raise ValueError(f"unknown link action '{action}'")
+
+
+def _log_link(url, response):
+    try:
+        os.makedirs(DATA_FOLDER, exist_ok=True)
+        with open(os.path.join(DATA_FOLDER, "links.log"), "a", encoding="utf-8") as f:
+            error = None if response.get("ok") else response.get("error")
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {url} -> {'ok' if error is None else error}\n")
+    except OSError:
+        pass
 
 
 # -- argument parsing ------------------------------------------------------------
@@ -414,6 +433,38 @@ def build_parser():
     q.add_argument("--show", action="store_true", help="overlay it on the board")
     q.add_argument("--visits", "-v", type=int)
     s.add_parser("status")
+
+    p = cmd("sandbox", "background analysis on private copies; the user's board is never touched (until 'show')")
+    s = p.add_subparsers(dest="sub", metavar="ACTION", required=True)
+    q = s.add_parser("new", help="copy a position of the user's game into a hidden sandbox")
+    q.add_argument("--from", dest="from_", help="node to copy (default: the user's current position)")
+    q.add_argument("--name", help="sandbox id (default s1, s2, ...)")
+    q = s.add_parser("play", help="play moves in a sandbox")
+    q.add_argument("id")
+    q.add_argument("moves", nargs="+")
+    q.add_argument("--color", help="color of the first move")
+    q = s.add_parser("back", help="take back moves in a sandbox")
+    q.add_argument("id")
+    q.add_argument("n", nargs="?", type=int, default=1)
+    q = s.add_parser("board", help="show a sandbox board")
+    q.add_argument("id")
+    q.add_argument("--ascii", action="store_true", help="print only the text diagram")
+    q = s.add_parser("analyze", help="analyze a sandbox position at low priority")
+    q.add_argument("id")
+    q.add_argument("--visits", "-v", type=int)
+    q.add_argument("--moves", nargs="+", help="compare these candidate moves")
+    q.add_argument("--top", type=int)
+    q.add_argument("--no-pv", action="store_true")
+    q.add_argument("--pv-limit", type=int)
+    q.add_argument("--ownership", action="store_true")
+    q.add_argument("--force", action="store_true")
+    q = s.add_parser("show", help="bring a sandbox line to the user's board")
+    q.add_argument("id")
+    q.add_argument("--as", dest="as_", choices=["pv", "demo"], default="pv")
+    q.add_argument("--step", type=int, help="show only the first N moves")
+    s.add_parser("list", help="list sandboxes")
+    q = s.add_parser("drop", help="delete a sandbox (or 'all')")
+    q.add_argument("id")
     _accept_global_options_everywhere(parser)
     return parser
 
@@ -631,6 +682,34 @@ def to_api(a):
         if sub == "solution":
             return "tsumego.solution", {"show": a.show, "visits": a.visits, "timeout": t}, t
         return f"tsumego.{sub}", {}, None
+    if c == "sandbox":
+        if sub == "new":
+            return "sandbox.new", {"from": a.from_, "name": a.name}, None
+        if sub == "play":
+            return "sandbox.play", {"id": a.id, "moves": a.moves, "color": a.color}, None
+        if sub == "back":
+            return "sandbox.back", {"id": a.id, "n": a.n}, None
+        if sub == "board":
+            return "sandbox.board", {"id": a.id}, None
+        if sub == "analyze":
+            t = a.timeout or ANALYSIS_TIMEOUT
+            args = {
+                "id": a.id,
+                "visits": a.visits,
+                "moves": a.moves,
+                "top": a.top,
+                "pv": not a.no_pv,
+                "pv_limit": a.pv_limit,
+                "ownership": a.ownership,
+                "force": a.force,
+                "timeout": t,
+            }
+            return "sandbox.analyze", args, t
+        if sub == "show":
+            return "sandbox.show", {"id": a.id, "as": a.as_, "step": a.step}, None
+        if sub == "drop":
+            return "sandbox.drop", {"id": a.id}, None
+        return "sandbox.list", {}, None
     raise ValueError(f"unhandled command {c} {sub}")
 
 
@@ -708,13 +787,16 @@ def main(argv=None):
         if a.cmd == "open":
             try:
                 command, args = link_to_command(a.url)
-            except ValueError as e:
-                print(str(e), file=sys.stderr)
-                return EXIT_USAGE
-            return _finish(call(command, args, port=a.port), a.compact)
+                response = call(command, args, port=a.port)
+            except (ValueError, NotRunning) as e:
+                response = {"ok": False, "error": {"code": "bad_link", "message": str(e)}}
+            if sys.stdout is None:  # launched by the katrain:// protocol handler via pythonw: no console
+                _log_link(a.url, response)
+            return _finish(response, a.compact)
         command, args, wait = to_api(a)
         timeout = (wait + 30) if wait else (a.timeout or 60)
-        text_key = "ascii" if a.cmd == "board" and a.ascii else None
+        wants_ascii = a.cmd == "board" or (a.cmd == "sandbox" and getattr(a, "sub", None) == "board")
+        text_key = "ascii" if wants_ascii and a.ascii else None
         return _finish(call(command, args, port=a.port, timeout=timeout), a.compact, text_key)
     except NotRunning as e:
         _print_json({"ok": False, "error": {"code": "gui_not_running", "message": str(e)}}, a.compact)

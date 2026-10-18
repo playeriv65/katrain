@@ -97,6 +97,27 @@ Two ways, use whichever fits:
 Outside demo mode, `play` and `variation add` change the game tree and report `"game_modified": true`.
 Nothing is ever written to the user's SGF files unless you call `sgf export -o`.
 
+## Two modes: explaining on the user's board vs. thinking in the background
+
+The user is looking at, and may be playing on, the same KaTrain board you control.
+
+* Foreground (the user sees it): `goto`, `play`, `pv show`, `mark`, `demo start/end`, `message`.
+  Only use these when you are explaining something; the user's own navigation moves the same board.
+* Background (the user never sees it): sandboxes are private copies of a position.
+
+```
+katrain sandbox new --from 36            # -> {"id": "s1", ...}; copies the position after move 36
+katrain sandbox play s1 H5 B8 E8         # explore freely, legality is checked
+katrain sandbox analyze s1 -v 2000       # low-priority search; the GUI's own analysis goes first
+katrain sandbox analyze s1 --moves H6 H4 # compare candidates in the sandbox position
+katrain sandbox back s1 2 | sandbox board s1 --ascii | sandbox list | sandbox drop s1
+katrain sandbox show s1 --step 3         # foreground: overlay the sandbox line on the user's board
+katrain sandbox show s1 --as demo        # foreground: real moves inside demo mode (demo end removes them)
+```
+
+Prefer reading (`status`, `analysis get`, `board`) and sandboxes while the user is working; switch to the
+foreground only to show a conclusion.
+
 ## Registered variations and links
 
 ```
