@@ -993,6 +993,10 @@ msgstr "壁までの距離"
 msgid "tsumego:ko"
 msgstr "劫でもOK"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "拡大して外枠を隠す"
+
 #. Menu option for tsumego frame around position
 msgid "analysis:tsumegoframe"
 msgstr "詰碁用の外枠"

@@ -548,12 +548,14 @@ class KaTrainGui(Screen, KaTrainBase):
         popup.content.popup = popup
         popup.open()
 
-    def _do_tsumego_frame(self, ko, margin):
-        from katrain.core.tsumego_frame import tsumego_frame_from_katrain_game
+    def _do_tsumego_frame(self, ko, margin, zoom=False):
+        from katrain.core.tsumego_frame import tsumego_frame_from_katrain_game, tsumego_view_region
+        from katrain.gui.zoomview import set_zoom
 
         if not self.game.stones:
             return
 
+        problem_coords = [m.coords for m in self.game.stones]
         black_to_play_p = self.next_player_info.player == "B"
         node, analysis_region = tsumego_frame_from_katrain_game(
             self.game, self.game.komi, black_to_play_p, ko_p=ko, margin=margin
@@ -569,7 +571,17 @@ class KaTrainGui(Screen, KaTrainBase):
                 analysis_region[1][0],
             ]
             self.game.set_region_of_interest(flattened_region)
-        node.analyze(self.game.engines[node.next_player])
+            # moves outside the region only change the frame, so the local best move is the reference for hints
+            self.game.region_root = True
+            node.analyze(
+                self.game.engines[node.next_player], region_of_interest=self.game.region_of_interest, region_root=True
+            )
+        else:
+            node.analyze(self.game.engines[node.next_player])
+        if zoom:
+            frame_coords = {m.coords for m in node.placements}
+            region = tsumego_view_region(problem_coords, self.game.board_size)
+            Clock.schedule_once(lambda _dt: set_zoom(self.board_gui, region, frame_coords, node), -1)
         self.update_state(redraw_board=True)
 
     def play_mistake_sound(self, node):

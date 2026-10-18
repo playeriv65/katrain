@@ -993,6 +993,10 @@ msgstr "Distance du mur :"
 msgid "tsumego:ko"
 msgstr "Permettre les kos"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "Zoomer et masquer le cadre"
+
 #. Menu option for tsumego frame around position
 msgid "analysis:tsumegoframe"
 msgstr "Composer un problème"

@@ -195,11 +195,14 @@ class GameNode(BaseGoNode["GameNode"]):
         find_alternatives=False,
         region_of_interest=None,
         report_every=REPORT_DT,
+        region_root=False,
     ):
+        # region_root: the region-limited result is also the node's evaluation (tsumego frame: the best move
+        # outside the region is frame noise, so the local best move should show no loss)
         engine.request_analysis(
             self,
             callback=lambda result, partial_result: self.set_analysis(
-                result, refine_move, find_alternatives, region_of_interest, partial_result
+                result, refine_move, find_alternatives, None if region_root else region_of_interest, partial_result
             ),
             priority=priority,
             visits=visits,

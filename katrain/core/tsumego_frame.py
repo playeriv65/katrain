@@ -26,6 +26,32 @@ def tsumego_frame_from_katrain_game(game, komi, black_to_play_p, ko_p, margin):
     return (played_node, katrain_region)
 
 
+VIEW_MARGIN = 2  # empty lines shown around the problem in the zoomed view
+VIEW_MIN_SPAN = 7
+
+
+def tsumego_view_region(coords, board_size):
+    """[xmin, xmax, ymin, ymax] to show for a problem with stones at coords: their bounding box plus a margin,
+    widened towards the board center to at least VIEW_MIN_SPAN lines."""
+    szx, szy = board_size
+    coords = [c for c in coords if c is not None]
+    if not coords:
+        return [0, szx - 1, 0, szy - 1]
+
+    def span(lo, hi, size):
+        lo, hi = max(0, lo - VIEW_MARGIN), min(size - 1, hi + VIEW_MARGIN)
+        while hi - lo + 1 < min(VIEW_MIN_SPAN, size):
+            if lo > 0 and (hi == size - 1 or lo > size - 1 - hi):
+                lo -= 1
+            else:
+                hi += 1
+        return lo, hi
+
+    xmin, xmax = span(min(c[0] for c in coords), max(c[0] for c in coords), szx)
+    ymin, ymax = span(min(c[1] for c in coords), max(c[1] for c in coords), szy)
+    return [xmin, xmax, ymin, ymax]
+
+
 def katrain_sgf_from_ijs(ijs, isize, jsize, player):
     return [Move((j, i)).sgf((jsize, isize)) for i, j in ijs]
 

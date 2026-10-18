@@ -930,6 +930,10 @@ msgstr "벽까지의 거리"
 msgid "tsumego:ko"
 msgstr "패로 충분?"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "확대하고 틀 숨기기"
+
 #. Menu option for tsumego frame around position
 msgid "analysis:tsumegoframe"
 msgstr "묘수풀이 틀"

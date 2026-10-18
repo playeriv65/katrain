@@ -1064,6 +1064,7 @@
 <TsumegoFramePopup>:
     ko: ko
     margin: margin
+    zoom: zoom
     orientation: 'vertical'
     button: button
     BoxLayout:
@@ -1083,6 +1084,14 @@
         AnchorLayout:
             LabelledCheckBox:
                 id: ko
+    BoxLayout:
+        size_hint: 1, 1.5
+        orientation: 'horizontal'
+        DescriptionLabel:
+            text: i18n._('tsumego:zoom')
+        AnchorLayout:
+            LabelledCheckBox:
+                id: zoom
     AnchorLayout:
         size_hint: 1, 1
         AutoSizedRoundedRectangleButton:
@@ -1091,7 +1100,7 @@
             size_hint: None,0.66
             text: i18n._("analysis:tsumegoframe") # re-use string
             on_press:
-                root.katrain("tsumego-frame", ko=ko.input_value, margin=margin.input_value)
+                root.katrain("tsumego-frame", ko=ko.input_value, margin=margin.input_value, zoom=zoom.input_value)
                 root.popup.dismiss()
 
 <LoadSGFPopup>:

@@ -1061,6 +1061,10 @@ msgstr "Відстань до стінки"
 msgid "tsumego:ko"
 msgstr "Дозволити ко?"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "Збільшити та сховати рамку"
+
 msgid "ai:human"
 msgstr "Людиноподібний"
 

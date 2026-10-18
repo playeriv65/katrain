@@ -35,6 +35,15 @@ from katrain.core.utils import evaluation_class, format_visits, json_truncate_ar
 from katrain.gui.popups import GameReportPopup, I18NPopup, ReAnalyzeGamePopup, TsumegoFramePopup
 from katrain.gui.theme import Theme
 from katrain.gui.widgets.drawing import cached_texture, draw_circle, draw_text
+from katrain.gui.zoomview import (
+    draw_zoomed_board,
+    is_hidden,
+    is_visible,
+    pop_view_clip,
+    push_view_clip,
+    view_center,
+    zoom_active,
+)
 
 
 class BadukPanWidget(Widget):
@@ -55,6 +64,11 @@ class BadukPanWidget(Widget):
         self.active_pv_moves = []
         self.animating_pv = None
         self.animating_pv_index = None
+        self.zoom_region = None  # [xmin, xmax, ymin, ymax] to show only part of the board (see gui/zoomview.py)
+        self.zoom_node = None  # the zoomed view applies from this node on
+        self.zoom_clip = None
+        self.zoomed = False  # whether the board is currently drawn zoomed
+        self.hidden_coords = set()  # stones kept in the game but not drawn while zoomed (the tsumego frame)
         self.last_mouse_pos = (0, 0)
         Window.bind(mouse_pos=self.on_mouse_pos)
         self.redraw_board_contents_trigger = Clock.create_trigger(self.draw_board_contents, 0.05)
@@ -95,7 +109,11 @@ class BadukPanWidget(Widget):
             return
         xd, xp, yd, yp = self._find_closest(touch.x, touch.y)
         prev_ghost = self.ghost_stone
-        if max(yd, xd) < self.grid_size / 2 and (xp, yp) not in [m.coords for m in self.katrain.game.stones]:
+        if (
+            max(yd, xd) < self.grid_size / 2
+            and (xp, yp) not in [m.coords for m in self.katrain.game.stones]
+            and is_visible(self, (xp, yp))
+        ):
             self.ghost_stone = (xp, yp)
         else:
             self.ghost_stone = None
@@ -322,6 +340,13 @@ class BadukPanWidget(Widget):
     def draw_board(self, *_args):
         if not (self.katrain and self.katrain.game):
             return
+        if zoom_active(self):
+            self.zoomed = True
+            return draw_zoomed_board(self)
+        if self.zoomed:  # back from the zoomed view: rebuild the normal grid
+            self.zoomed = False
+            self.zoom_clip = None
+            self.gridpos = None
         katrain = self.katrain
         board_size_x, board_size_y = katrain.game.board_size
 
@@ -601,12 +626,15 @@ class BadukPanWidget(Widget):
         board_size_x, board_size_y = katrain.game.board_size
         if self.gridpos is None or len(self.gridpos) < board_size_y or len(self.gridpos[0]) < board_size_x:
             return  # race condition
+        if zoom_active(self) != self.zoomed:  # navigated into or out of the zoomed positions
+            self.draw_board()
         show_n_eval = self.trainer_config.get("eval_on_show_last", 3)
         ownership_grid = None
         loss_grid = None
 
         with self.canvas:
             self.canvas.clear()
+            push_view_clip(self)
             current_node = katrain.game.current_node
 
             # ownership - allow one move out of date for smooth animation,
@@ -656,6 +684,8 @@ class BadukPanWidget(Widget):
                         evalscale = min(1, max(0, realized_points_lost / points_lost))
                 placements = node.placements
                 for m in node.moves + placements:
+                    if is_hidden(self, m.coords):
+                        continue
                     new_move = (
                         current_node.move and m.coords == current_node.move.coords
                     ) and not current_node.ownership
@@ -760,6 +790,7 @@ class BadukPanWidget(Widget):
                             pass_btn.height / 2,
                             (*colors[pol_order][:3], Theme.GHOST_ALPHA),
                         )
+            pop_view_clip(self)
 
         self.redraw_hover_contents_trigger()
 
@@ -897,11 +928,12 @@ class BadukPanWidget(Widget):
         next_player = current_node.next_player
 
         board_size_x, board_size_y = katrain.game.board_size
-        if len(self.gridpos[0]) < board_size_x or len(self.gridpos) < board_size_y:
-            return  # race condition
+        if not self.gridpos or len(self.gridpos[0]) < board_size_x or len(self.gridpos) < board_size_y:
+            return  # race condition, or the grid is being rebuilt after a zoom change
 
         with self.canvas.after:
             self.canvas.after.clear()
+            push_view_clip(self)
 
             self.active_pv_moves = []
             # hints or PV
@@ -1074,7 +1106,7 @@ class BadukPanWidget(Widget):
                     up_to_move = self.get_animate_pv_index()
                     self.draw_pv(pv, node, up_to_move)
 
-                if getattr(self.katrain.game, "region_of_interest", None):
+                if getattr(self.katrain.game, "region_of_interest", None) and not self.zoomed:
                     self.draw_roi_box(self.katrain.game.region_of_interest, width=dp(1.25))
 
             # pass circle
@@ -1085,11 +1117,16 @@ class BadukPanWidget(Widget):
                 else:
                     text = i18n._("board-pass")
                 Color(*Theme.PASS_CIRCLE_COLOR)
-                center = (self.initial_gridpos_x[int(board_size_x / 2)], self.initial_gridpos_y[int(board_size_y / 2)])
+                center = view_center(self) or (
+                    self.initial_gridpos_x[int(board_size_x / 2)],
+                    self.initial_gridpos_y[int(board_size_y / 2)],
+                )
                 size = min(self.width, self.height) * 0.227
                 Ellipse(pos=(center[0] - size / 2, center[1] - size / 2), size=(size, size))
                 Color(*Theme.PASS_CIRCLE_TEXT_COLOR)
                 draw_text(pos=center, text=text, font_size=size * 0.25, halign="center")
+
+            pop_view_clip(self)
 
     def animate_pv(self, _dt):
         if self.animating_pv:
@@ -1165,6 +1202,8 @@ class BadukPanWidget(Widget):
         return self.animating_pv_index
 
     def rotate_gridpos(self):
+        if self.zoomed:
+            return  # the zoomed diagram is always drawn unrotated
         board_size_x, board_size_y = self.katrain.game.board_size
         if board_size_x != board_size_y:
             if self.rotation_degree == 90 or self.rotation_degree == 270:
@@ -1229,7 +1268,7 @@ class AnalysisDropDown(DropDown):
 
     def open_tsumego_frame_popup(self, *_args):
         analysis_popup = I18NPopup(
-            title_key="analysis:tsumegoframe", size=[dp(500), dp(350)], content=TsumegoFramePopup()
+            title_key="analysis:tsumegoframe", size=[dp(500), dp(460)], content=TsumegoFramePopup()
         )
         analysis_popup.content.popup = analysis_popup
         analysis_popup.content.katrain = App.get_running_app().gui

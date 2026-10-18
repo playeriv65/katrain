@@ -971,6 +971,10 @@ msgstr "邊界距離"
 msgid "tsumego:ko"
 msgstr "允許打劫？"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "放大局部並隱藏外框"
+
 #. Menu option for tsumego frame around position
 msgid "analysis:tsumegoframe"
 msgstr "死活題外框"

@@ -956,6 +956,10 @@ msgstr "Расстояние до стены"
 msgid "tsumego:ko"
 msgstr "Разрешить ко?"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "Увеличить и скрыть рамку"
+
 #. Menu option for tsumego frame around position
 msgid "analysis:tsumegoframe"
 msgstr "Рамка для цумэ-го"

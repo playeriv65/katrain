@@ -1118,6 +1118,10 @@ msgstr "Distance of wall"
 msgid "tsumego:ko"
 msgstr "Ko allowed?"
 
+#. tsumego: zoom the board to the problem and hide the frame stones
+msgid "tsumego:zoom"
+msgstr "Zoom in and hide frame"
+
 msgid "engine:tab:local"
 msgstr "Local engine"
 
