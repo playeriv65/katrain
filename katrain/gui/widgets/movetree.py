@@ -214,8 +214,11 @@ class MoveTreeCanvas(Widget):
                 Color(*Theme.STONE_COLORS["W" if node.player == "B" and not node.shortcut_from else "B"])
                 draw_text(pos=pos, text=text, font_size=self.move_size * 1.75 / (1 + 1 * len(text)), font_name="Roboto")
 
-            if current_node in self.move_xy_pos:
-                self.scroll_view_widget.scroll_to_pixel(*self.move_xy_pos[current_node])
+        self.scroll_to_node(current_node)
+
+    def scroll_to_node(self, node):
+        if node in self.move_xy_pos:
+            self.scroll_view_widget.scroll_to_pixel(*self.move_xy_pos[node])
 
 
 class MoveTree(ScrollView, BackgroundMixin):
@@ -225,10 +228,23 @@ class MoveTree(ScrollView, BackgroundMixin):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.insert_node = None
-        self.redraw_tree_trigger = Clock.create_trigger(
-            lambda _dt: self.move_tree_canvas.draw_move_tree(self.current_node, self.insert_node), 0.1
-        )
-        self.bind(current_node=self.redraw_tree_trigger, size=self.redraw_tree_trigger)
+        self.redraw_tree_trigger = Clock.create_trigger(self._draw_tree, 0.1)
+        # the node size follows the window height: while the window is being resized, redraw the tree once it
+        # stops changing instead of on every frame
+        self.redraw_after_resize_trigger = Clock.create_trigger(self._draw_tree, 0.3)
+        self.bind(current_node=self.redraw_tree_trigger, min_height=self._on_min_height, size=self._on_size)
+
+    def _draw_tree(self, *_args):
+        self.move_tree_canvas.draw_move_tree(self.current_node, self.insert_node)
+
+    def _on_min_height(self, *_args):
+        self.redraw_after_resize_trigger.cancel()  # restart the wait
+        self.redraw_after_resize_trigger()
+
+    def _on_size(self, *_args):
+        tree_canvas = getattr(self, "move_tree_canvas", None)  # set by the kv rule, after the first size events
+        if tree_canvas is not None:
+            tree_canvas.scroll_to_node(self.current_node)  # the drawing itself does not depend on our size
 
     def redraw(self):
         self.redraw_tree_trigger()
