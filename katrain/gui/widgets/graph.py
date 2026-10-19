@@ -21,8 +21,9 @@ class Graph(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._lock = threading.Lock()
-        self.bind(pos=self.update_graph, size=self.update_graph)
         self.redraw_trigger = Clock.create_trigger(self.update_graph, 0.1)
+        # through the trigger: a window resize changes pos and size every frame, recomputing each time was slow
+        self.bind(pos=self.redraw_trigger, size=self.redraw_trigger)
 
     def initialize_from_game(self, root):
         self.nodes = [root]
