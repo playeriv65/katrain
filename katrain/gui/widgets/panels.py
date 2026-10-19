@@ -233,6 +233,7 @@ class CollapsablePanel(BoxLayout):
         self.header = CollapsablePanelHeader(size_hint_y=None, padding=[1, 0, 0, 0])
         self.collapse_button = TransparentIconButton(size_hint_x=None, on_press=lambda *_args: self.set_state("toggle"))
         self.option_buttons = []
+        self.closed_header_label = None
         super().__init__(**kwargs)
         self.orientation = "vertical"
         self.bind(
@@ -240,8 +241,8 @@ class CollapsablePanel(BoxLayout):
             option_labels=self._rebuild_tabs,
             option_colors=self._rebuild_tabs,
             option_active=self._rebuild_tabs,
-            options_height=self._rebuild_tabs,
-            options_spacing=self._rebuild_tabs,
+            options_height=self._resize_header,
+            options_spacing=self._resize_header,
         )
         self.bind(state=self._on_state, content_height=self._update_height)
         App.get_running_app().bind(language=lambda *_args: Clock.schedule_once(self._rebuild_tabs, 0))
@@ -298,26 +299,17 @@ class CollapsablePanel(BoxLayout):
     def _rebuild(self, *_args):
         """Fill in the header row, and the contents below it while the panel is open."""
         open_ = self.state == "open"
-        self.header.height = self.options_height
-        self.header.spacing = self.options_spacing
         self.collapse_button.icon = self.open_icon if open_ else self.close_icon
-        self.collapse_button.icon_size = [0.5 * self.options_height, 0.5 * self.options_height]
-        self.collapse_button.width = 0.75 * self.options_height
 
         self.header.clear_widgets()
+        self.closed_header_label = None
         if open_:
             for button in self.option_buttons:
                 self.header.add_widget(button)
             self.header.add_widget(Label())  # spacer, pushes the collapse button to the right
         else:
-            self.header.add_widget(
-                Label(
-                    text=i18n._(self.closed_label),
-                    font_name=i18n.font_name,
-                    halign="right",
-                    height=self.options_height,
-                )
-            )
+            self.closed_header_label = Label(text=i18n._(self.closed_label), font_name=i18n.font_name, halign="right")
+            self.header.add_widget(self.closed_header_label)
         self.header.add_widget(self.collapse_button)
 
         super().clear_widgets()
@@ -325,6 +317,21 @@ class CollapsablePanel(BoxLayout):
         if open_:
             for widget in self.contents:
                 super().add_widget(widget)
+        self._resize_header()
+
+    def _resize_header(self, *_args):
+        """Apply the tab height and spacing to the existing header widgets.
+
+        The tab height follows the window height, so this runs on every step of a window resize: it must not
+        recreate the tabs, which is what made resizing slow."""
+        self.header.height = self.options_height
+        self.header.spacing = self.options_spacing
+        self.collapse_button.icon_size = [0.5 * self.options_height, 0.5 * self.options_height]
+        self.collapse_button.width = 0.75 * self.options_height
+        for button in self.option_buttons:
+            button.height = self.options_height
+        if self.closed_header_label is not None:
+            self.closed_header_label.height = self.options_height
         self._update_height()
 
     def _update_height(self, *_args):
